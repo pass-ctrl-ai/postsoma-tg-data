@@ -77,27 +77,30 @@ This doc defines the canonical storage format (`tools.jsonl`) and recommended ou
 
 ### 2.1 Telegram post (default)
 
-Principles:
-- 1 tool per post (early stage), or 3–5 tools per daily digest
-- Keep **title + link + 2–3 bullets + tags**
+Default mode: **1 tool per post**.
 
-**Single-tool template**
+Principles:
+- Keep it skimmable: **title + 1–2 sentence summary + 2–3 bullets + tags + link**
+- Language default: **English** (tool names stay as-is)
+- You can still do manual/occasional digests when needed
+
+**Single-tool template (EN)**
 
 ```
 【{title}】
 {summary}
 
-• 亮点：{highlight1}；{highlight2}
-• 适合：{use_case}
-• 标签：#{tag1} #{tag2}
+• Highlights: {highlight1}; {highlight2}
+• Best for: {use_case}
+• Tags: #{tag1} #{tag2}
 
-链接：{url}
+Link: {url}
 ```
 
-**Digest template**
+**Optional digest template (manual use)**
 
 ```
-今日工具清单（{date}）
+Today’s tools ({date})
 
 1) {title1}
 - {one-liner1}
