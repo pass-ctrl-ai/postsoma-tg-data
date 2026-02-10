@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://postsoma.example/schema/tool-item.schema.json",
+  "title": "PostSoma Tool Item",
+  "type": "object",
+  "required": ["id", "url", "title", "created_at", "source", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {"type": "string", "minLength": 6},
+    "url": {"type": "string", "format": "uri"},
+    "canonical_url": {"type": ["string", "null"], "format": "uri"},
+    "title": {"type": "string"},
+    "summary": {"type": ["string", "null"]},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "language": {"type": ["string", "null"], "description": "BCP-47 like 'en'/'zh'."},
+
+    "status": {
+      "type": "string",
+      "enum": ["inbox", "shortlisted", "scheduled", "posted", "dropped"]
+    },
+
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": ["string", "null"], "format": "date-time"},
+
+    "source": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {"type": "string", "enum": ["manual", "tg", "rss", "github", "web"]},
+        "chat_id": {"type": ["string", "null"]},
+        "message_id": {"type": ["string", "null"]},
+        "author": {"type": ["string", "null"]}
+      }
+    },
+
+    "published": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "channel": {"type": ["string", "null"]},
+        "post_id": {"type": ["string", "null"]},
+        "posted_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+
+    "content": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "highlights": {"type": "array", "items": {"type": "string"}},
+        "pricing": {"type": ["string", "null"], "enum": ["free", "paid", "freemium", "unknown", null]},
+        "platform": {"type": "array", "items": {"type": "string"}},
+        "open_source": {"type": ["string", "null"], "enum": ["yes", "no", "unknown", null]},
+        "repo": {"type": ["string", "null"], "format": "uri"}
+      }
+    }
+  }
+}

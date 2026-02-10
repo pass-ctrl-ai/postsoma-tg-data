@@ -1,0 +1,6 @@
+# Local
+.env
+.DS_Store
+
+# Optional generated artifacts
+/data/index.json
