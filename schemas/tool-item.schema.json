@@ -10,8 +10,15 @@
     "url": {"type": "string", "format": "uri"},
     "canonical_url": {"type": ["string", "null"], "format": "uri"},
     "title": {"type": "string"},
-    "summary": {"type": ["string", "null"]},
-    "tags": {"type": "array", "items": {"type": "string"}},
+    "summary": {"type": ["string", "null"], "maxLength": 160, "description": "1 sentence, <=160 chars (guideline enforced here as maxLength)."},
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+([-/][a-z0-9]+)*$",
+        "description": "Hierarchical tags, e.g. ai/agents, dev/cli. Lowercase alnum with / or - separators."
+      }
+    },
     "language": {"type": ["string", "null"], "description": "BCP-47 like 'en'/'zh'."},
 
     "status": {

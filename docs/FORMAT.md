@@ -80,7 +80,9 @@ This doc defines the canonical storage format (`tools.jsonl`) and recommended ou
 Default mode: **1 tool per post**.
 
 Principles:
-- Keep it skimmable: **title + 1–2 sentence summary + 2–3 bullets + tags + link**
+- Keep it skimmable: **title + 1-sentence summary + 2–3 bullets + tags + link**
+- Summary length guideline: **<= 160 chars** (1 sentence)
+- Tags: **hierarchical** using `/` (e.g. `ai/agents`, `dev/cli`)
 - Language default: **English** (tool names stay as-is)
 - You can still do manual/occasional digests when needed
 
