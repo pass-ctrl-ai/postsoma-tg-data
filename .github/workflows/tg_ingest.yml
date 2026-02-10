@@ -3,7 +3,10 @@ name: tg-ingest
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "*/10 * * * *"  # every 10 minutes
+    # 3x per day (UTC): 00:17, 08:17, 16:17
+    - cron: "17 0 * * *"
+    - cron: "17 8 * * *"
+    - cron: "17 16 * * *"
 
 permissions:
   contents: write
