@@ -99,16 +99,100 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
+function decodeHtmlEntities(s) {
+  return String(s)
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function cleanSummary(s) {
+  let out = decodeHtmlEntities(String(s || '')).replace(/\s+/g, ' ').trim();
+  // Drop common low-quality / SEO boilerplate
+  const bad = [
+    'Contribute to',
+    'by creating an account on GitHub',
+    'Sign up for',
+    'Subscribe',
+    'cookies',
+    'newsletter',
+  ];
+  if (bad.some(b => out.toLowerCase().includes(b.toLowerCase()))) return null;
+  // Trim trailing boilerplate separators
+  out = out.replace(/\s+[\-|•|·]\s+GitHub\s*$/i, '').trim();
+  return out || null;
+}
+
+function parseGitHubRepo(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname !== 'github.com') return null;
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length < 2) return null;
+    const owner = parts[0];
+    const repo = parts[1];
+    // ignore pages like /topics, /search
+    if (!owner || !repo) return null;
+    return { owner, repo };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGitHubRepoMeta(owner, repo) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      signal: ctrl.signal,
+      headers: {
+        'user-agent': 'PostSomaBot/1.0',
+        'accept': 'application/vnd.github+json'
+      }
+    });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      full_name: data.full_name,
+      description: data.description,
+      stargazers_count: data.stargazers_count,
+      homepage: data.homepage,
+      topics: data.topics
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function buildMessage(item) {
   let title = safeTitle(item);
   const url = item.canonical_url || item.url;
 
   let description = null;
 
+  const summary = (item.summary || '').trim();
+  const summaryMissing = !summary;
+
+  // Special-case GitHub repos (much better summary/title than HTML meta on github.com)
+  const gh = url ? parseGitHubRepo(url) : null;
+  if (gh) {
+    const meta = await fetchGitHubRepoMeta(gh.owner, gh.repo);
+    if (meta) {
+      title = meta.full_name || title;
+      if (summaryMissing && meta.description) description = meta.description;
+      // If item.tags empty, use a light default tag.
+      if (Array.isArray(item.tags) && item.tags.length === 0) {
+        item.tags = ['dev/open-source'];
+      }
+    }
+  }
+
   // If title is still basically a URL (and/or summary missing), try to fetch page title + meta description.
   if (url) {
     const titleIsUrlish = (title === url || title === (item.canonical_url || '') || title === (item.url || ''));
-    const summaryMissing = !(item.summary || '').trim();
     if (titleIsUrlish || summaryMissing) {
       const meta = await fetchPageMeta(url);
       if (titleIsUrlish && meta.title) title = meta.title;
@@ -116,12 +200,15 @@ async function buildMessage(item) {
     }
   }
 
-  const summary = (item.summary || '').trim();
+  // Clean up HTML entities + boilerplate
+  title = decodeHtmlEntities(title);
+  const cleanedDesc = cleanSummary(description);
+
   const tags = formatTags(item.tags);
 
   // Enforce 1-sentence, <=160 chars guideline as best-effort (without LLM)
-  const baseSummary = summary || description || 'A useful web find worth saving.';
-  const summaryLine = baseSummary.slice(0, 160);
+  const baseSummary = summary || cleanedDesc || 'A useful web find worth saving.';
+  const summaryLine = decodeHtmlEntities(baseSummary).slice(0, 160);
 
   const highlights = item.content?.highlights;
   const hl = Array.isArray(highlights) && highlights.length
