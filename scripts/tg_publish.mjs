@@ -54,10 +54,46 @@ function formatTags(tags) {
   return ['#webintel', ...hashTags].join(' ');
 }
 
-function buildMessage(item) {
-  const title = safeTitle(item);
-  const summary = (item.summary || '').trim();
+async function fetchPageTitle(url) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        'user-agent': 'PostSomaBot/1.0 (+https://github.com/pass-ctrl-ai/postsoma-tg-data)'
+      }
+    });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const html = (await res.text()).slice(0, 120_000);
+    const m = html.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
+    if (!m) return null;
+    return m[1].replace(/\s+/g, ' ').trim();
+  } catch {
+    return null;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function buildMessage(item) {
+  let title = safeTitle(item);
   const url = item.canonical_url || item.url;
+
+  // If title is still basically a URL, try to fetch a real page title.
+  if (url && (title === url || title === (item.canonical_url || '') || title === (item.url || ''))) {
+    const pageTitle = await fetchPageTitle(url);
+    if (pageTitle) title = pageTitle;
+  }
+
+  const summary = (item.summary || '').trim();
   const tags = formatTags(item.tags);
 
   // Enforce 1-sentence, <=160 chars guideline as best-effort (without LLM)
@@ -71,18 +107,18 @@ function buildMessage(item) {
   const bestFor = item.content?.best_for || item.content?.use_case;
   const bf = bestFor ? `• Best for: ${String(bestFor).slice(0, 120)}` : null;
 
-  const lines = [
-    `【${title}】`,
-    summaryLine,
-    '',
-    hl,
-    bf,
-    tags,
-    '',
-    `Link: ${url}`,
-  ].filter(x => x != null && String(x).trim().length > 0);
+  const bodyLines = [hl, bf].filter(Boolean);
 
-  return lines.join('\n');
+  // HTML parse_mode for clean formatting
+  const parts = [
+    `<b>${escapeHtml(title)}</b>`,
+    escapeHtml(summaryLine),
+    bodyLines.length ? `\n${escapeHtml(bodyLines.join('\n'))}` : '',
+    `\n${escapeHtml(tags)}`,
+    `\n🔗 ${escapeHtml(url)}`
+  ].filter(Boolean);
+
+  return parts.join('\n');
 }
 
 async function tgSendMessage(text) {
@@ -93,7 +129,8 @@ async function tgSendMessage(text) {
     body: JSON.stringify({
       chat_id: CHANNEL_CHAT_ID,
       text,
-      disable_web_page_preview: false
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
     })
   });
   if (!res.ok) {
@@ -117,7 +154,7 @@ if (!next) {
   process.exit(0);
 }
 
-const text = buildMessage(next);
+const text = await buildMessage(next);
 const result = await tgSendMessage(text);
 
 // Mark posted
