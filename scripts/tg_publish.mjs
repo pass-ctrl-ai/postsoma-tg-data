@@ -14,6 +14,7 @@ import fs from 'node:fs';
 
 const TOKEN = process.env.TG_BOT_TOKEN;
 const CHANNEL_CHAT_ID = process.env.CHANNEL_CHAT_ID;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 if (!TOKEN) throw new Error('Missing env TG_BOT_TOKEN');
 if (!CHANNEL_CHAT_ID) throw new Error('Missing env CHANNEL_CHAT_ID');
@@ -167,6 +168,92 @@ async function fetchGitHubRepoMeta(owner, repo) {
   }
 }
 
+function sanitizeHierTag(t) {
+  // Lowercase, keep alnum + / + -
+  const out = String(t || '').trim().toLowerCase().replace(/[^a-z0-9\/-]+/g, '-');
+  return out.replace(/^-+|-+$/g, '').replace(/\/+/, '/');
+}
+
+function uniq(arr) {
+  return [...new Set(arr)];
+}
+
+function tryParseJson(text) {
+  try {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) return null;
+    const slice = text.slice(start, end + 1);
+    return JSON.parse(slice);
+  } catch {
+    return null;
+  }
+}
+
+async function geminiEnrich({ url, title, description }) {
+  if (!GEMINI_API_KEY) return null;
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  const prompt = `You are writing a Telegram post for an English "Web Intel" channel.
+
+Given a URL and optional hints, generate strictly VALID JSON with keys:
+- title: short, human-friendly (<=80 chars)
+- summary: exactly ONE sentence, <=160 chars, no quotes around it
+- highlights: array of 2 short bullet phrases (each <=60 chars)
+- tags: array of 1-3 hierarchical tags using / (lowercase). Examples: ai/agents, dev/cli, security/privacy, data/etl, ops/infra, design/ui, productivity/automation
+
+Rules:
+- Do NOT include any other keys.
+- Do NOT wrap in markdown.
+- Do NOT include URLs in summary/highlights.
+
+Input:
+URL: ${url}
+Hint title: ${title || ''}
+Hint description: ${description || ''}
+`;
+
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: 256
+    }
+  };
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Gemini API failed: ${res.status} ${t}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('') || '';
+  const json = tryParseJson(text);
+  if (!json) return null;
+
+  const out = {
+    title: typeof json.title === 'string' ? json.title.trim() : null,
+    summary: typeof json.summary === 'string' ? json.summary.trim() : null,
+    highlights: Array.isArray(json.highlights) ? json.highlights.map(x => String(x).trim()).filter(Boolean) : [],
+    tags: Array.isArray(json.tags) ? json.tags.map(sanitizeHierTag).filter(Boolean) : [],
+  };
+
+  if (out.summary && out.summary.length > 160) out.summary = out.summary.slice(0, 160);
+  if (out.title && out.title.length > 120) out.title = out.title.slice(0, 120);
+
+  out.highlights = out.highlights.slice(0, 2).map(h => h.slice(0, 60));
+  out.tags = uniq(out.tags).slice(0, 3);
+
+  return out;
+}
+
 async function buildMessage(item) {
   let title = safeTitle(item);
   const url = item.canonical_url || item.url;
@@ -200,25 +287,42 @@ async function buildMessage(item) {
     }
   }
 
-  // Clean up HTML entities + boilerplate
+  // LLM enrich (Gemini) to improve title/summary/highlights/tags.
+  // Only runs when GEMINI_API_KEY is set.
+  const enrich = await geminiEnrich({
+    url,
+    title: decodeHtmlEntities(title),
+    description: cleanSummary(description) || description
+  }).catch(() => null);
+
+  if (enrich?.title) title = enrich.title;
+  const finalSummary = (enrich?.summary || summary || cleanSummary(description) || 'A useful web find worth saving.').trim();
+
+  // Merge tags
+  if (enrich?.tags?.length) {
+    const merged = uniq([...(Array.isArray(item.tags) ? item.tags : []), ...enrich.tags].map(sanitizeHierTag).filter(Boolean));
+    item.tags = merged.slice(0, 3);
+  }
+
+  // Attach highlights (for future use)
+  if (enrich?.highlights?.length) {
+    item.content = item.content || {};
+    item.content.highlights = enrich.highlights;
+  }
+
+  // Clean up HTML entities
   title = decodeHtmlEntities(title);
-  const cleanedDesc = cleanSummary(description);
 
   const tags = formatTags(item.tags);
 
-  // Enforce 1-sentence, <=160 chars guideline as best-effort (without LLM)
-  const baseSummary = summary || cleanedDesc || 'A useful web find worth saving.';
-  const summaryLine = decodeHtmlEntities(baseSummary).slice(0, 160);
+  const summaryLine = decodeHtmlEntities(finalSummary).slice(0, 160);
 
   const highlights = item.content?.highlights;
   const hl = Array.isArray(highlights) && highlights.length
-    ? `• Highlights: ${highlights.slice(0, 2).join('; ')}`
+    ? highlights.slice(0, 2).map(h => `• ${String(h).trim()}`).join('\n')
     : null;
 
-  const bestFor = item.content?.best_for || item.content?.use_case;
-  const bf = bestFor ? `• Best for: ${String(bestFor).slice(0, 120)}` : null;
-
-  const bodyLines = [hl, bf].filter(Boolean);
+  const bodyLines = [hl].filter(Boolean);
 
   // HTML parse_mode for clean formatting
   const parts = [
