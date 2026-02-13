@@ -54,10 +54,10 @@ function formatTags(tags) {
   return ['#webintel', ...hashTags].join(' ');
 }
 
-async function fetchPageTitle(url) {
+async function fetchPageMeta(url) {
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
+    const t = setTimeout(() => ctrl.abort(), 7000);
     const res = await fetch(url, {
       signal: ctrl.signal,
       redirect: 'follow',
@@ -66,13 +66,29 @@ async function fetchPageTitle(url) {
       }
     });
     clearTimeout(t);
-    if (!res.ok) return null;
-    const html = (await res.text()).slice(0, 120_000);
-    const m = html.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
-    if (!m) return null;
-    return m[1].replace(/\s+/g, ' ').trim();
+    if (!res.ok) return { title: null, description: null };
+
+    const html = (await res.text()).slice(0, 180_000);
+
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,300})<\/title>/i);
+    const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : null;
+
+    // Prefer OG/Twitter descriptions then meta name=description
+    const ogDesc = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{1,400})["'][^>]*>/i)
+      || html.match(/<meta[^>]+content=["']([^"']{1,400})["'][^>]+property=["']og:description["'][^>]*>/i);
+
+    const twDesc = html.match(/<meta[^>]+name=["']twitter:description["'][^>]+content=["']([^"']{1,400})["'][^>]*>/i)
+      || html.match(/<meta[^>]+content=["']([^"']{1,400})["'][^>]+name=["']twitter:description["'][^>]*>/i);
+
+    const metaDesc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,400})["'][^>]*>/i)
+      || html.match(/<meta[^>]+content=["']([^"']{1,400})["'][^>]+name=["']description["'][^>]*>/i);
+
+    const descriptionRaw = (ogDesc?.[1] || twDesc?.[1] || metaDesc?.[1] || '').trim();
+    const description = descriptionRaw ? descriptionRaw.replace(/\s+/g, ' ').trim() : null;
+
+    return { title, description };
   } catch {
-    return null;
+    return { title: null, description: null };
   }
 }
 
@@ -87,17 +103,25 @@ async function buildMessage(item) {
   let title = safeTitle(item);
   const url = item.canonical_url || item.url;
 
-  // If title is still basically a URL, try to fetch a real page title.
-  if (url && (title === url || title === (item.canonical_url || '') || title === (item.url || ''))) {
-    const pageTitle = await fetchPageTitle(url);
-    if (pageTitle) title = pageTitle;
+  let description = null;
+
+  // If title is still basically a URL (and/or summary missing), try to fetch page title + meta description.
+  if (url) {
+    const titleIsUrlish = (title === url || title === (item.canonical_url || '') || title === (item.url || ''));
+    const summaryMissing = !(item.summary || '').trim();
+    if (titleIsUrlish || summaryMissing) {
+      const meta = await fetchPageMeta(url);
+      if (titleIsUrlish && meta.title) title = meta.title;
+      if (summaryMissing && meta.description) description = meta.description;
+    }
   }
 
   const summary = (item.summary || '').trim();
   const tags = formatTags(item.tags);
 
   // Enforce 1-sentence, <=160 chars guideline as best-effort (without LLM)
-  const summaryLine = summary ? summary.slice(0, 160) : 'A useful web find worth saving.';
+  const baseSummary = summary || description || 'A useful web find worth saving.';
+  const summaryLine = baseSummary.slice(0, 160);
 
   const highlights = item.content?.highlights;
   const hl = Array.isArray(highlights) && highlights.length
