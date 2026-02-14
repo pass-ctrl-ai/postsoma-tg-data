@@ -130,7 +130,28 @@ function tryParseJson(text) {
 async function geminiEnrich({ url, title, description }) {
   if (!GEMINI_API_KEY) return null;
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const prompt = `You are writing an English knowledge-base entry for a \"Web Intel\" library.\n\nReturn strictly VALID JSON with keys:\n- summary: exactly ONE sentence, <=160 chars\n- highlights: array of 2 short bullet phrases (<=60 chars each)\n- tags: array of 1-3 hierarchical tags using / (lowercase). Examples: ai/agents, dev/cli, dev/open-source, security/privacy, data/etl, ops/infra, design/ui, productivity/automation\n\nRules:\n- Do NOT include any other keys.\n- Do NOT wrap in markdown.\n- Do NOT include URLs.\n\nInput:\nURL: ${url}\nTitle hint: ${title}\nDescription hint: ${description || ''}\n`;
+  const prompt = `You are writing an English knowledge-base entry for a \"Web Intel\" library.
+
+Return strictly VALID JSON with keys:
+- summary: exactly ONE sentence, <=160 chars, no surrounding quotes
+- highlights: array of 2 short bullet phrases (<=60 chars each)
+- tags: array of 1-3 hierarchical tags using / (lowercase)
+- notes_md: short Markdown with these sections (no H1):
+  - What it is
+  - Why it matters
+  - How to try
+  Keep it concise.
+
+Rules:
+- Do NOT include any other keys.
+- Do NOT wrap in markdown code fences.
+- Do NOT include URLs (we add the link separately).
+
+Input:
+URL: ${url}
+Title hint: ${title}
+Description hint: ${description || ''}
+`;
 
   const res = await fetch(endpoint, {
     method: 'POST',
@@ -149,14 +170,21 @@ async function geminiEnrich({ url, title, description }) {
   const json = tryParseJson(text);
   if (!json) return null;
 
+  let summary = typeof json.summary === 'string' ? json.summary.trim() : null;
+  if (summary) {
+    // Remove accidental surrounding quotes
+    summary = summary.replace(/^"+|"+$/g, '').trim();
+  }
   const out = {
-    summary: typeof json.summary === 'string' ? json.summary.trim() : null,
+    summary,
     highlights: Array.isArray(json.highlights) ? json.highlights.map(x => String(x).trim()).filter(Boolean) : [],
-    tags: Array.isArray(json.tags) ? json.tags.map(sanitizeHierTag).filter(Boolean) : []
+    tags: Array.isArray(json.tags) ? json.tags.map(sanitizeHierTag).filter(Boolean) : [],
+    notes_md: typeof json.notes_md === 'string' ? json.notes_md.trim() : null
   };
   if (out.summary && out.summary.length > 160) out.summary = out.summary.slice(0, 160);
   out.highlights = out.highlights.slice(0, 2).map(h => h.slice(0, 60));
   out.tags = uniq(out.tags).slice(0, 3);
+  if (out.notes_md && out.notes_md.length > 2000) out.notes_md = out.notes_md.slice(0, 2000);
   return out;
 }
 
@@ -179,9 +207,15 @@ function isoNow() {
 function makeNotesMd({ meta, enrich, url }) {
   const hl = enrich?.highlights?.length ? enrich.highlights.map(h => `- ${h}`).join('\n') : '- (auto)';
   const tags = enrich?.tags?.length ? enrich.tags.join(', ') : '(none)';
+  const summary = (enrich?.summary || meta.description || '').trim();
+
+  const body = enrich?.notes_md
+    ? `${enrich.notes_md.trim()}\n\n`
+    : '';
 
   return `# ${meta.full_name}\n\n` +
-    `**Summary:** ${enrich?.summary || meta.description || ''}\n\n` +
+    (summary ? `**Summary:** ${summary}\n\n` : '') +
+    (body ? body : '') +
     `## Highlights\n${hl}\n\n` +
     `## Metadata\n` +
     `- Stars: ${meta.stars}\n` +
