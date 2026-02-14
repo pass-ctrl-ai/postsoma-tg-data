@@ -70,8 +70,11 @@ This doc defines the canonical storage format (`tools.jsonl`) and recommended ou
 
 ### Status lifecycle
 
-- `inbox` → `shortlisted` → `scheduled` → `posted`
+- `inbox` → `enriched` → `shortlisted` → `scheduled` → `posted`
 - Alternative terminal: `dropped`
+
+Notes:
+- `enriched` means the item has a clean English `title/summary/highlights/tags` and is ready for publishing.
 
 ## 2) Output formats
 

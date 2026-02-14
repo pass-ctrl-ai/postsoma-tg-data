@@ -23,7 +23,7 @@
 
     "status": {
       "type": "string",
-      "enum": ["inbox", "shortlisted", "scheduled", "posted", "dropped"]
+      "enum": ["inbox", "enriched", "shortlisted", "scheduled", "posted", "dropped"]
     },
 
     "created_at": {"type": "string", "format": "date-time"},
