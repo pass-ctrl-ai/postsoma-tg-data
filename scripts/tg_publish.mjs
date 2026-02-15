@@ -15,6 +15,13 @@ import fs from 'node:fs';
 const TOKEN = process.env.TG_BOT_TOKEN;
 const CHANNEL_CHAT_ID = process.env.CHANNEL_CHAT_ID;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+// Optional comma-separated fallbacks, used if the primary model errors/timeouts.
+const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash,gemini-1.5-flash')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
 
 if (!TOKEN) throw new Error('Missing env TG_BOT_TOKEN');
 if (!CHANNEL_CHAT_ID) throw new Error('Missing env CHANNEL_CHAT_ID');
@@ -193,7 +200,7 @@ function tryParseJson(text) {
 async function geminiEnrich({ url, title, description }) {
   if (!GEMINI_API_KEY) return null;
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const candidates = [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter(m => m !== GEMINI_MODEL)];
 
   const prompt = `You are writing a Telegram post for an English "Web Intel" channel.
 
@@ -222,18 +229,68 @@ Hint description: ${description || ''}
     }
   };
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+  let lastErr = null;
 
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`Gemini API failed: ${res.status} ${t}`);
+  for (const modelId of candidates) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+    try {
+      const ctrl = new AbortController();
+      const tmr = setTimeout(() => ctrl.abort(), 15_000);
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      clearTimeout(tmr);
+
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        lastErr = new Error(`Gemini API failed (${modelId}): ${res.status} ${t}`);
+        continue;
+      }
+
+      const data = await res.json();
+
+      // Success path
+      const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('') || '';
+      const json = tryParseJson(text);
+      if (!json) return null;
+
+      const out = {
+        title: typeof json.title === 'string' ? json.title.trim() : null,
+        summary: typeof json.summary === 'string' ? json.summary.trim() : null,
+        highlights: Array.isArray(json.highlights) ? json.highlights.map(x => String(x).trim()).filter(Boolean) : [],
+        tags: Array.isArray(json.tags) ? json.tags.map(sanitizeHierTag).filter(Boolean) : [],
+      };
+
+      if (out.summary && out.summary.length > 160) out.summary = out.summary.slice(0, 160);
+      if (out.title && out.title.length > 120) out.title = out.title.slice(0, 120);
+
+      out.highlights = out.highlights.slice(0, 2).map(h => h.slice(0, 60));
+      out.tags = uniq(out.tags).slice(0, 3);
+
+      return out;
+
+    } catch (e) {
+      lastErr = e;
+      continue;
+    }
   }
 
-  const data = await res.json();
+  if (lastErr) throw lastErr;
+  return null;
+
+  // Unreachable
+  // return null;
+
+  // NOTE: we return inside the loop on success.
+
+  // End geminiEnrich
+
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('') || '';
   const json = tryParseJson(text);
   if (!json) return null;
